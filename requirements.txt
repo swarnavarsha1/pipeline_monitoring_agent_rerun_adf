@@ -1,0 +1,12 @@
+langchain
+openai
+langchain-community
+langchain-openai
+requests
+python-dotenv
+azure-identity
+azure-mgmt-datafactory
+faiss-cpu
+PyPDF2
+pypdf
+python-dateutil

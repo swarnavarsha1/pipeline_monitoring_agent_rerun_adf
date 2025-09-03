@@ -1,0 +1,59 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec
+
+# ---- Virtualenv ----
+venv/
+venvadf/
+.env*
+
+# ---- Logs & temp ----
+*.log
+*.tmp
+*.swp
+*.swo
+
+# ---- Bytecode & cache ----
+.ipynb_checkpoints/
+.mypy_cache/
+.pytest_cache/
+.cache/
+.coverage
+htmlcov/
+
+# ---- Environment & secrets ----
+.env
+.env.local
+.env.*
+!env.example
+
+# ---- SQLite DB ----
+*.db
+*.sqlite3
+context_store.db
+
+# ---- FAISS / Vector stores ----
+knowledge_base/vectorstore/*
+knowledge_base/vectorstore/
+!knowledge_base/vectorstore/.gitkeep
+
+# ---- OS / Editor Files ----
+.DS_Store
+Thumbs.db
+*.VSCodeCounter
+.vscode/
+.idea/
+
+# ---- Test artifacts ----
+test_output/
+
+test.py
+context_store.db
