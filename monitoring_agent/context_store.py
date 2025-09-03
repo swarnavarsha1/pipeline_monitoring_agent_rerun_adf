@@ -65,10 +65,17 @@ class ContextStoreSQLite:
 
     def update_status(self, run_id, status):
         with self._lock, self.conn:
-            self.conn.execute("""
+            cur = self.conn.execute("""
             UPDATE pipeline_runs SET status = ?, last_updated = ?
             WHERE run_id = ?
             """, (status, datetime.now(timezone.utc).isoformat(), run_id))
+            
+            if cur.rowcount == 0:  # no rows updated → insert instead
+                self.conn.execute("""
+                INSERT INTO pipeline_runs (run_id, status, last_updated)
+                VALUES (?, ?, ?)
+                """, (run_id, status, datetime.now(timezone.utc).isoformat()))
+
 
     def get_last_query_time(self) -> datetime or None:
         with self._lock, self.conn:
@@ -86,3 +93,10 @@ class ContextStoreSQLite:
             INSERT INTO metadata (key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value=excluded.value
             """, ("last_query_time", dt.isoformat()))
+
+    def get_status(self, run_id):
+        with self._lock, self.conn:
+            cursor = self.conn.execute("SELECT status FROM pipeline_runs WHERE run_id = ?", (run_id,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+

@@ -6,16 +6,24 @@ import smtplib
 from email.message import EmailMessage
 import os
 
-def setup_logging():
-    formatter = logging.Formatter(
-        '%(asctime)s [%(levelname)s] %(name)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(formatter)
-    logger = logging.getLogger()
-    logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
-    logger.handlers = [handler]
+import logging
+
+def setup_logger(name: str) -> logging.Logger:
+    """
+    Returns a logger with a clean, consistent format:
+    2025-09-03 15:20:43 [ComponentName] message
+    """
+    logger = logging.getLogger(name)
+    if not logger.handlers: 
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            fmt="[%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+    return logger
 
 def send_email(subject: str, body: str, to_addresses):
     """

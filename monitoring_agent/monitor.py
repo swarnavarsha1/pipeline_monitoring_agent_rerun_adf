@@ -14,9 +14,11 @@ from shared.schemas import FailureContext
 from shared.config import POLL_INTERVAL_SECONDS, RETRY_THRESHOLD
 from decision_agent.decision_logic import DecisionLogicAgent
 from trigger_agent.trigger_runner import TriggerAgent
+from notification_agent.notifier import Notifier 
+from knowledge_base.solution_retriever import RAGSolutionRetriever
+from shared.utils import setup_logger
 
-
-logger = logging.getLogger(__name__)
+logger = setup_logger("Monitoring_Agent")
 
 class MonitoringAgent:
     def __init__(self):
@@ -29,6 +31,7 @@ class MonitoringAgent:
         self.auth_client = AzureAuthClient()
         self.decision_agent = DecisionLogicAgent()
         self.trigger_agent = TriggerAgent()
+        self.notifier = Notifier() 
 
         self.adf_base_url = (
             f"https://management.azure.com/subscriptions/{self.subscription_id}"
@@ -45,16 +48,11 @@ class MonitoringAgent:
 
     def query_pipeline_runs(self, access_token, since_time):
         url = f"{self.adf_base_url}/queryPipelineRuns?api-version={self.api_version}"
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         params = {
             "lastUpdatedAfter": since_time.isoformat(),
             "lastUpdatedBefore": datetime.datetime.now(timezone.utc).isoformat(),
-            "filters": [
-                {"operand": "Status", "operator": "In", "values": ["Failed", "Succeeded"]}
-            ]
+            "filters": [{"operand": "Status", "operator": "In", "values": ["Failed", "Succeeded"]}],
         }
         response = requests.post(url, json=params, headers=headers)
         if not response.ok:
@@ -64,80 +62,85 @@ class MonitoringAgent:
 
     def get_failed_activity(self, access_token, run_id):
         url = f"{self.adf_base_url}/pipelineruns/{run_id}/queryActivityRuns?api-version={self.api_version}"
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         body = {
             "lastUpdatedAfter": (datetime.datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
-            "lastUpdatedBefore": datetime.datetime.now(timezone.utc).isoformat()
+            "lastUpdatedBefore": datetime.datetime.now(timezone.utc).isoformat(),
         }
         response = requests.post(url, json=body, headers=headers)
         if not response.ok:
             logger.error(f"Failed to query activity runs for run {run_id}: {response.text}")
             return None
-        activities = response.json().get("value", [])
-        for act in activities:
+        for act in response.json().get("value", []):
             if act.get("status") == "Failed":
                 return act.get("activityName")
         return None
 
     def process_failures(self, failures):
-        """
-        For each failure, confirm with user → ask GPT + RAG → decide rerun or escalate.
-        """
         for failure in failures:
             run_id = failure.run_id
             pipeline_name = failure.pipeline_name
 
             retries_left = self.context_store.get_retry_count(run_id) or RETRY_THRESHOLD
             if retries_left < 1:
-                logger.info(f"Run {run_id} has no retries left. Escalating to manual intervention.")
-                # Escalation notification here
+                logger.info(f"Run {run_id} has no retries left. Escalating.")
+                self.context_store.set_retry_count(run_id, 0)
                 continue
 
-            # Ask user confirmation
             confirm = input(f"Run {run_id} of {pipeline_name} failed. Retry? (y/n): ").strip().lower()
             if confirm != "y":
                 logger.info(f"User declined retry for run {run_id}. Escalating...")
-                self.context_store.set_retry_count(run_id, 0)   # ✅ fixed method name
-                # Escalation notification here
-                continue
 
-            # AI decision (with RAG context)
-            decision = self.decision_agent.make_decision(failure)
-            logger.info(f"AI Decision for {pipeline_name} ({run_id}): {decision}")
-
-            if decision["action"] == "no_rerun":
-                logger.info(f"No rerun suggested for run {run_id}. Escalating.")
                 self.context_store.set_retry_count(run_id, 0)
+
+                # 🔔 Notify even when user declines
+                self.notifier.notify_failure(
+                    failure,
+                    {"action": "no_rerun", "reason": "User declined retry"},
+                    rerun_outcome=None,
+                    rag_solution=None
+                )
                 continue
 
-            # ✅ Execute decision using TriggerAgent (real rerun in ADF)
-            try:
-                self.trigger_agent.execute_decision(decision, failure)
-                logger.info(f"Triggered retry for {pipeline_name} (orig={run_id}) via TriggerAgent")
-            except Exception as e:
-                logger.error(f"Failed to trigger retry for run {run_id}: {e}")
-                self.context_store.set_retry_count(run_id, 0)
-                continue
+            # ✅ AI Decision
+            ai_result = self.decision_agent.make_decision(failure)
 
-            # ✅ Decrement retry count since we attempted a rerun
+            rag = RAGSolutionRetriever()
+            rag_solution = rag.get_solution(ai_result["reason"])
+
+            logger.info("\n     AI Response for failure:")
+            logger.info(f"      Action   : {ai_result['action']}")
+            logger.info(f"      Reason   : {ai_result['reason']}\n")
+            logger.info(f"      Suggested Solution:\n      {rag_solution}\n")
+
+            rerun_outcome = None
+            if ai_result["action"] != "no_rerun":
+                try:
+                    rerun_outcome = self.trigger_agent.execute_decision(ai_result, failure)
+                    logger.info(f"Triggered retry for {pipeline_name} (orig={run_id}) via TriggerAgent")
+                except Exception as e:
+                    rerun_outcome = {"error": str(e)}
+                    self.context_store.set_retry_count(run_id, 0)
+
+            # ✅ Send consolidated notification (ONLY once per failure)
+            self.notifier.notify_failure(
+                failure,
+                ai_result,
+                rerun_outcome,
+                solution=rag_solution
+            )
+
+            # ✅ Update retry counter
             self.context_store.set_retry_count(run_id, retries_left - 1)
+
 
 
     def poll(self):
         logger.info("Starting monitoring loop.")
         while True:
             now_utc = datetime.datetime.now(timezone.utc)
-            lookback_duration = timedelta(hours=10)  # Always check last 3 hours
-            since_time = now_utc - lookback_duration
-
-            local_tz = dateutil.tz.tzlocal()
-            logger.info(
-                f"Polling ADF pipeline runs (Failed + Succeeded) since "
-                f"UTC {since_time.isoformat()} / local {since_time.astimezone(local_tz).isoformat()}"
-            )
+            since_time = now_utc - timedelta(hours=2)
+            logger.info(f"Polling ADF pipeline runs since {since_time}")
 
             try:
                 token = self.get_access_token()
@@ -147,16 +150,12 @@ class MonitoringAgent:
                 time.sleep(self.poll_interval)
                 continue
 
-            failures = []
-            success_count = 0
-            failure_count = 0
+            failures, success_count, failure_count = [], 0, 0
 
             for run in runs:
-                run_id = run.get("runId")
-                pipeline_name = run.get("pipelineName")
+                run_id, pipeline_name = run.get("runId"), run.get("pipelineName")
                 status = run.get("status", "Unknown")
                 error_message = run.get("message", "No error message available")
-
                 if not run_id:
                     continue
 
@@ -164,31 +163,30 @@ class MonitoringAgent:
                     success_count += 1
                     logger.info(f"Pipeline run succeeded: run_id={run_id}, pipeline={pipeline_name}")
                     self.context_store.create_or_update_run(run_id, pipeline_name, "Succeeded", RETRY_THRESHOLD)
-                    continue
-
-                if status == "Failed":
+                elif status == "Failed":
                     failure_count += 1
+                    db_status = self.context_store.get_status(run_id)
+                    if db_status in ["retrying", "succeeded", "failed_no_retry", "superseded"]:
+                        logger.info(f"Skipping run {run_id} (DB status={db_status})")
+                        continue
+                    if (self.context_store.get_retry_count(run_id) or RETRY_THRESHOLD) < 1:
+                        logger.info(f"Run {run_id} has no retries left. Skipping.")
+                        continue
                     failed_activity = self.get_failed_activity(token, run_id)
-
-                    failure_context = FailureContext(
-                        pipeline_name=pipeline_name,
-                        run_id=run_id,
-                        status=status,
-                        error_message=error_message,
-                        failed_activity=failed_activity,
-                        timestamp=now_utc
+                    failures.append(
+                        FailureContext(
+                            pipeline_name=pipeline_name,
+                            run_id=run_id,
+                            status=status,
+                            error_message=error_message,
+                            failed_activity=failed_activity,
+                            timestamp=now_utc,
+                        )
                     )
-                    failures.append(failure_context)
 
-            logger.info(
-                f"Discovered {failure_count} failed and {success_count} succeeded pipeline runs. "
-                f"Current UTC: {now_utc.isoformat()} / local: {now_utc.astimezone(local_tz).isoformat()}"
-            )
-
-            # Process failures with retry loop + user confirmation + RAG
+            logger.info(f"Discovered {failure_count} failed and {success_count} succeeded pipeline runs.")
             if failures:
                 self.process_failures(failures)
 
-            # Sleep until next poll
             logger.info(f"Sleeping {self.poll_interval} seconds before next poll...")
             time.sleep(self.poll_interval)

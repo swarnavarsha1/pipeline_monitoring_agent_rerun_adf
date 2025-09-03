@@ -7,15 +7,14 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables as early as possible
 
-from shared.utils import setup_logging
+from shared.utils import setup_logger
 from monitoring_agent.monitor import MonitoringAgent
 from decision_agent.decision_logic import DecisionLogicAgent
 from trigger_agent.trigger_runner import TriggerAgent
 from feedback_agent.feedback_loop import FeedbackAgent
 
 def main():
-    setup_logging()
-    logger = logging.getLogger(__name__)
+    logger = setup_logger("Main")
     logger.info("Starting Azure Data Factory monitoring pipeline assistant.")
 
     monitor = MonitoringAgent()

@@ -5,8 +5,10 @@ import logging
 import requests
 from monitoring_agent.context_store import ContextStoreSQLite
 from monitoring_agent.azure_ad_integration import AzureAuthClient
+from shared.config import RETRY_THRESHOLD
+from shared.utils import setup_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_logger("Trigger_Rerun_Agent")
 
 class TriggerAgent:
     def __init__(self):
@@ -68,11 +70,18 @@ class TriggerAgent:
                 logger.error(f"Failed to trigger pipeline rerun: {response.status_code} - {response.text}")
                 self.context_store.update_status(run_id, "failed_rerun_error")
                 return
+
             run_info = response.json()
             new_run_id = run_info.get("runId", "unknown")
-            logger.info(f"Pipeline rerun triggered: new_run_id={new_run_id} (reason: {reason})")
-            self.context_store.update_status(run_id, "retrying")
+            logger.info(f"Pipeline rerun triggered: new_run_id={new_run_id}")
+
+            # ✅ Mark the old failed run as superseded
+            self.context_store.update_status(run_id, "superseded")
+
+            # ✅ Track the new run in DB as retrying (with full retry threshold)
+            self.context_store.create_or_update_run(new_run_id, pipeline_name, "retrying", RETRY_THRESHOLD)
 
         except Exception as e:
             logger.error(f"Exception during rerun API call for run {run_id}: {e}")
             self.context_store.update_status(run_id, "failed_rerun_exception")
+

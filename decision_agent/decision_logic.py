@@ -12,11 +12,12 @@ from langchain.prompts import (
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
+from shared.utils import setup_logger
 from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = setup_logger("Decision_Logic_Agent")
 
 class DecisionLogicAgent:
     def __init__(self):
@@ -89,7 +90,7 @@ class DecisionLogicAgent:
         attempt = 0
         while attempt < max_retries:
             try:
-                response = self.chat(prompt.to_messages())
+                response = self.chat.invoke(prompt.to_messages())
                 logger.debug(f"Raw GPT response content: {response.content}")
 
                 decision = json.loads(response.content)
