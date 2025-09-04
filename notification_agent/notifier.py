@@ -44,6 +44,14 @@ class Notifier:
 
         subject = f"ADF Pipeline Failure — {pipeline_name}"
 
+        # ✅ Format rerun outcome nicely
+        if isinstance(rerun_outcome, dict) and "runId" in rerun_outcome:
+            rerun_text = f"Rerun triggered successfully.\nNew Run ID: {rerun_outcome['runId']}"
+        elif rerun_outcome:
+            rerun_text = str(rerun_outcome)
+        else:
+            rerun_text = "No rerun attempted."
+
         body = f"""
 Time: {timestamp}
 Pipeline: {pipeline_name}
@@ -59,7 +67,8 @@ Suggested Solution (from Knowledge Base):
 {solution or "No documented solution found."}
 
 Rerun Outcome:
-{rerun_outcome or "No rerun attempted."}
+{rerun_text}
 """
         self.send_email(subject, body)
+
 

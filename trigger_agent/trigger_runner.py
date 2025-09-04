@@ -80,6 +80,7 @@ class TriggerAgent:
 
             # ✅ Track the new run in DB as retrying (with full retry threshold)
             self.context_store.create_or_update_run(new_run_id, pipeline_name, "retrying", RETRY_THRESHOLD)
+            return {"runID": new_run_id, "status":"triggered"}
 
         except Exception as e:
             logger.error(f"Exception during rerun API call for run {run_id}: {e}")
