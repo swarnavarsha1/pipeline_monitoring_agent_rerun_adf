@@ -87,43 +87,43 @@ class MonitoringAgent:
                 self.context_store.set_retry_count(run_id, 0)
                 continue
 
-            confirm = input(f"Run {run_id} of {pipeline_name} failed. Retry? (y/n): ").strip().lower()
-            if confirm != "y":
-                logger.info(f"User declined retry for run {run_id}. Escalating...")
+            # 🔹 Always show basic failure info
+            logger.info(f"\n[Failure Detected]")
+            logger.info(f"   Pipeline : {pipeline_name}")
+            logger.info(f"   Run ID   : {run_id}")
+            logger.info(f"   Error    : {failure.error_message or 'No error message available'}")
+            logger.info(f"   Activity : {failure.failed_activity or 'Unknown'}")
 
-                self.context_store.set_retry_count(run_id, 0)
+            # 🔹 Ask if user wants detailed analysis
+            see_details = input("Do you want to see detailed analysis (AI decision + solution)? (y/n): ").strip().lower()
 
-                # 🔔 Notify even when user declines
-                self.notifier.notify_failure(
-                    failure,
-                    {"action": "no_rerun", "reason": "User declined retry"},
-                    rerun_outcome=None,
-                    solution=None
-                )
+            ai_result, rag_solution = {"action": "no_rerun", "reason": "No analysis requested"}, None
+            if see_details == "y":
+                ai_result = self.decision_agent.make_decision(failure)
+                rag = RAGSolutionRetriever()
+                rag_solution = rag.get_solution(ai_result["reason"])
 
-                continue
+                logger.info("\n   AI Analysis:")
+                logger.info(f"      Action   : {ai_result['action']}")
+                logger.info(f"      Reason   : {ai_result['reason']}")
+                logger.info(f"      Suggested Solution: {rag_solution}\n")
 
-            # ✅ AI Decision
-            ai_result = self.decision_agent.make_decision(failure)
-
-            rag = RAGSolutionRetriever()
-            rag_solution = rag.get_solution(ai_result["reason"])
-
-            logger.info("\n     AI Response for failure:")
-            logger.info(f"      Action   : {ai_result['action']}")
-            logger.info(f"      Reason   : {ai_result['reason']}\n")
-            logger.info(f"      Suggested Solution:\n      {rag_solution}\n")
-
+            # 🔹 Ask for rerun decision separately
+            confirm = input(f"Do you want to rerun pipeline {pipeline_name} (Run {run_id})? (y/n): ").strip().lower()
             rerun_outcome = None
-            if ai_result["action"] != "no_rerun":
+
+            if confirm == "y" and ai_result.get("action") != "no_rerun":
                 try:
                     rerun_outcome = self.trigger_agent.execute_decision(ai_result, failure)
                     logger.info(f"Triggered retry for {pipeline_name} (orig={run_id}) via TriggerAgent")
                 except Exception as e:
                     rerun_outcome = {"error": str(e)}
                     self.context_store.set_retry_count(run_id, 0)
+            else:
+                logger.info(f"User declined rerun for {pipeline_name} (Run {run_id}). Escalating...")
+                self.context_store.set_retry_count(run_id, 0)
 
-            # ✅ Send consolidated notification (ONLY once per failure)
+            # ✅ Send consolidated notification (always once per failure)
             self.notifier.notify_failure(
                 failure,
                 ai_result,

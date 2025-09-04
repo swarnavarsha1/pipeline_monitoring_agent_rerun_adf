@@ -5,7 +5,7 @@ import logging
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables as early as possible
+load_dotenv() 
 
 from shared.utils import setup_logger
 from monitoring_agent.monitor import MonitoringAgent
