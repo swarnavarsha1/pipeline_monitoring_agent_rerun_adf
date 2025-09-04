@@ -98,8 +98,9 @@ class MonitoringAgent:
                     failure,
                     {"action": "no_rerun", "reason": "User declined retry"},
                     rerun_outcome=None,
-                    rag_solution=None
+                    solution=None
                 )
+
                 continue
 
             # ✅ AI Decision
@@ -139,7 +140,7 @@ class MonitoringAgent:
         logger.info("Starting monitoring loop.")
         while True:
             now_utc = datetime.datetime.now(timezone.utc)
-            since_time = now_utc - timedelta(hours=2)
+            since_time = now_utc - timedelta(hours=24)
             logger.info(f"Polling ADF pipeline runs since {since_time}")
 
             try:
